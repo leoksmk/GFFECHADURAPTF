@@ -5,10 +5,15 @@
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <FS.h>
-#include <LittleFS.h>
 #include <WiFiClientSecure.h>
 #include <time.h>
+
+// ====== LIGA/DESLIGA CSV LOCAL (LittleFS) ======
+#define USE_LOCAL_CSV 0
+#if USE_LOCAL_CSV
+#include <FS.h>
+#include <LittleFS.h>
+#endif
 
 // ============ CONFIG Wi-Fi / NTP / SUPABASE ============
 const char *WIFI_SSID = "Wokwi-GUEST"; // Wokwi
@@ -96,6 +101,7 @@ void atualizaLeds();
 void abreFechadura();
 void fechaFechadura();
 void trataTecla(char k);
+
 void carregarCredenciais();
 void salvarCredenciais();
 bool adicionarPIN(const String &, const String &);
@@ -103,10 +109,12 @@ bool removerPIN(const String &);
 bool senhaValida(const String &);
 String nomePorPIN(const String &);
 void listarCredenciaisSerial();
+
 void initFS();
 void exportCSVSerial();
 void clearCSV();
 void logEvento(const String &, const String &, const String &);
+
 String timestampAgora();
 void initWiFiNTP();
 void processaSerialComandos();
@@ -145,7 +153,7 @@ void setup()
 
   initWiFiNTP(); // no Wokwi conecta no Wokwi-GUEST e pega hora
 
-  // ping inicial na supabase (opcional)
+  // ping inicial na supabase (opcional). Se quiser evitar um 400 no boot, comente.
   if (haveCloud())
   {
     supabasePOST(timestampAgora(), "boot", "", "", "online");
@@ -293,7 +301,9 @@ void trataTecla(char k)
             telaMsg(adicionarPIN(pin, nome) ? "PIN adicionado" : "Falha ao adicionar", "Padrao: User_PIN");
           }
           else
+          {
             telaMsg("PIN invalido", "4-8 digitos");
+          }
         }
         else if (tipoAcaoAdmin == 'D')
         {
@@ -308,7 +318,9 @@ void trataTecla(char k)
             telaMsg("MASTER atualizado", "");
           }
           else
+          {
             telaMsg("MASTER invalido", "4-8 digitos");
+          }
         }
         acaoAdminPendente = false;
         tipoAcaoAdmin = 0;
@@ -585,7 +597,7 @@ void listarCredenciaisSerial()
 // ============ FS / CSV ============
 void initFS()
 {
-  // Monta LittleFS no rótulo padrão (littlefs). Formata se necessário.
+#if USE_LOCAL_CSV
   if (!LittleFS.begin(true))
   {
     Serial.println("LittleFS falhou. CSV desativado.");
@@ -600,10 +612,14 @@ void initFS()
       f.close();
     }
   }
+#else
+  // CSV desativado no Wokwi
+#endif
 }
 
 void exportCSVSerial()
 {
+#if USE_LOCAL_CSV
   File f = LittleFS.open("/logs.csv", FILE_READ);
   if (!f)
   {
@@ -615,9 +631,13 @@ void exportCSVSerial()
     Serial.write(f.read());
   Serial.println("----- FIM CSV -----");
   f.close();
+#else
+  Serial.println("CSV desativado.");
+#endif
 }
 void clearCSV()
 {
+#if USE_LOCAL_CSV
   LittleFS.remove("/logs.csv");
   File f = LittleFS.open("/logs.csv", FILE_WRITE);
   if (f)
@@ -625,19 +645,25 @@ void clearCSV()
     f.println("timestamp,usuario,pin,ssm,resultado");
     f.close();
   }
+#else
+  Serial.println("CSV desativado.");
+#endif
 }
+
 void logEvento(const String &resultado, const String &pin, const String &ssm)
 {
   String ts = timestampAgora();
   String usuario = nomePorPIN(pin);
-  // CSV local
+
+#if USE_LOCAL_CSV
   File f = LittleFS.open("/logs.csv", FILE_APPEND);
   if (f)
   {
     f.println(ts + "," + usuario + "," + pin + "," + ssm + "," + resultado);
     f.close();
   }
-  // Cloud (opcional)
+#endif
+
   if (haveCloud())
   {
     supabasePOST(ts, usuario, pin, ssm, resultado);
@@ -659,7 +685,6 @@ void initWiFiNTP()
   if (WiFi.status() == WL_CONNECTED)
   {
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
-    // aguarda relógio (até ~2s)
     for (int i = 0; i < 20; i++)
     {
       struct tm ti;
@@ -717,7 +742,8 @@ bool supabasePOST(const String &ts, const String &usuario, const String &pin,
 
   int code = http.POST(body);
   Serial.printf("Supabase HTTP %d\n", code);
-  // String resp = http.getString(); Serial.println(resp); // (debug)
+  // Se precisar debugar:
+  // if (code >= 400) { Serial.println(http.getString()); }
   http.end();
 
   return (code == 200 || code == 201 || code == 204);
@@ -775,14 +801,20 @@ void processaSerialComandos()
             Serial.println("Nome atualizado.");
           }
           else
+          {
             Serial.println("PIN nao encontrado.");
+          }
         }
         else
+        {
           Serial.println("Uso: SET <pin> <nome>");
+        }
       }
       linha = "";
     }
     else
+    {
       linha += c;
+    }
   }
 }
