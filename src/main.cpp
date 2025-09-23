@@ -15,17 +15,21 @@
 #include <LittleFS.h>
 #endif
 
+// ====== AJUSTES DE PERFORMANCE ======
+#define SUPA_BOOT_PING 0       // 0 = não envia "boot/online" ao iniciar (mais rápido)
+#define SUPA_RETRIES 1         // só 1 tentativa
+#define SUPA_CONN_TIMEOUT 8000 // timeout de conexão (ms)
+
 // ============ CONFIG Wi-Fi / NTP / SUPABASE ============
-const char *WIFI_SSID = "Wokwi-GUEST"; // Wokwi
+const char *WIFI_SSID = "Wokwi-GUEST";
 const char *WIFI_PASS = "";
 
 const char *NTP_SERVER = "pool.ntp.org";
-const long GMT_OFFSET_SEC = -3 * 3600; // Brasil (UTC-3)
+const long GMT_OFFSET_SEC = -3 * 3600;
 const int DAYLIGHT_OFFSET_SEC = 0;
 
-// Supabase (ajuste os nomes das colunas se a sua tabela for diferente)
-const char *SUPABASE_URL =
-    "https://tqawdemzrlfzzkyhaecz.supabase.co/rest/v1/acessos";
+const char *SUPABASE_URL = "https://tqawdemzrlfzzkyhaecz.supabase.co/rest/v1/acessos";
+const char *SUPABASE_HOST = "tqawdemzrlfzzkyhaecz.supabase.co";
 const char *SUPABASE_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRxYXdkZW16cmxmenpreWhhZWN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg0NzIzNzAsImV4cCI6MjA3NDA0ODM3MH0.dQaffEeK9DZ545D_c5z2nzIhLMJdK9wmmb3QyjhhGTc";
 
@@ -40,6 +44,7 @@ static inline bool haveCloud()
 const int PINO_RELE = 25;
 const int LED_VERDE_PIN = 13; // liberado
 const int LED_VERM_PIN = 15;  // bloqueado
+const int PINO_BOTAO = 26;    // << push-button físico
 
 // Teclado 4x4
 const byte LINHAS = 4, COLUNAS = 4;
@@ -48,14 +53,14 @@ char teclas[LINHAS][COLUNAS] = {
     {'4', '5', '6', 'B'},
     {'7', '8', '9', 'C'},
     {'*', '0', '#', 'D'}};
-byte pinosLinhas[LINHAS] = {19, 18, 5, 17};   // R1..R4
-byte pinosColunas[COLUNAS] = {16, 4, 27, 14}; // C1..C4
+byte pinosLinhas[LINHAS] = {19, 18, 5, 17};
+byte pinosColunas[COLUNAS] = {16, 4, 27, 14};
 Keypad teclado = Keypad(makeKeymap(teclas), pinosLinhas, pinosColunas, LINHAS, COLUNAS);
 
 // LCD I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-// ============ CONFIG LÓGICA ============
+// ============ LÓGICA ============
 const bool RELE_ATIVO_ALTO = true;
 const unsigned long TEMPO_ABERTO_MS = 5000UL;
 const unsigned long TEMPO_BLOQUEIO_MS = 30000UL;
@@ -90,6 +95,19 @@ bool acaoAdminPendente = false;
 char tipoAcaoAdmin = 0; // 'C','D','M'
 bool aguardandoSSM = false;
 
+// ===== TLS warm-up: ajuda a evitar erro -80 no Wokwi =====
+void tlsWarmup()
+{
+  WiFiClientSecure s;
+  s.setInsecure();
+  s.setTimeout(SUPA_CONN_TIMEOUT);
+  if (s.connect(SUPABASE_HOST, 443))
+  {
+    s.stop();
+    delay(150);
+  }
+}
+
 // ============ PROTÓTIPOS ============
 void telaInicial();
 void telaPedeSenha();
@@ -101,6 +119,7 @@ void atualizaLeds();
 void abreFechadura();
 void fechaFechadura();
 void trataTecla(char k);
+void checaBotao(); // << novo
 
 void carregarCredenciais();
 void salvarCredenciais();
@@ -128,6 +147,7 @@ void setup()
   pinMode(PINO_RELE, OUTPUT);
   pinMode(LED_VERDE_PIN, OUTPUT);
   pinMode(LED_VERM_PIN, OUTPUT);
+  pinMode(PINO_BOTAO, INPUT_PULLUP); // botão entre GPIO26 e GND
   digitalWrite(PINO_RELE, RELE_ATIVO_ALTO ? LOW : HIGH);
 
   Wire.begin(21, 22);
@@ -151,13 +171,13 @@ void setup()
   atualizaLeds();
   telaPedeSenha();
 
-  initWiFiNTP(); // no Wokwi conecta no Wokwi-GUEST e pega hora
+  initWiFiNTP();
+  tlsWarmup();
 
-  // ping inicial na supabase (opcional). Se quiser evitar um 400 no boot, comente.
+#if SUPA_BOOT_PING
   if (haveCloud())
-  {
     supabasePOST(timestampAgora(), "boot", "", "", "online");
-  }
+#endif
 
   Serial.println("=== FECHADURA ESP32 (Dual) ===");
   Serial.println("Fluxo: SENHA + #  ->  SSM (2-6) + #");
@@ -185,11 +205,41 @@ void loop()
     telaPedeSenha();
   }
 
+  checaBotao(); // << lê o botão físico
   char k = teclado.getKey();
   if (k)
     trataTecla(k);
 
   processaSerialComandos();
+}
+
+// ============ BOTÃO FÍSICO (GPIO26) ============
+void checaBotao()
+{
+  // debouncing + detecção de borda
+  static int lastRead = HIGH, stable = HIGH;
+  static unsigned long t = 0;
+  const unsigned long DEBOUNCE_MS = 30;
+
+  int r = digitalRead(PINO_BOTAO);
+  if (r != lastRead)
+  {
+    lastRead = r;
+    t = millis();
+  }
+  if ((millis() - t) > DEBOUNCE_MS && r != stable)
+  {
+    stable = r;
+    if (stable == LOW)
+    { // botão pressionado
+      if (!fechaduraAberta && tempoBloqueio == 0)
+      {
+        abreFechadura();
+        logEvento("sucesso_btn", "BOTAO", "");
+        telaMsg("ABERTO (BOTAO)", "");
+      }
+    }
+  }
 }
 
 // ============ TECLADO ============
@@ -201,7 +251,6 @@ void trataTecla(char k)
     return;
   }
 
-  // Limpar com '*'
   if (k == '*' && !modoAdmin && !aguardandoMaster && !acaoAdminPendente)
   {
     entrada = "";
@@ -209,7 +258,6 @@ void trataTecla(char k)
     return;
   }
 
-  // Entrar no ADMIN
   if (k == 'A' && !modoAdmin && !aguardandoMaster)
   {
     aguardandoMaster = true;
@@ -218,7 +266,6 @@ void trataTecla(char k)
     return;
   }
 
-  // Autenticação ADMIN
   if (aguardandoMaster)
   {
     if (k == '#')
@@ -252,7 +299,6 @@ void trataTecla(char k)
     }
   }
 
-  // ADMIN ativo
   if (modoAdmin)
   {
     if (k == 'B' && !acaoAdminPendente)
@@ -301,9 +347,7 @@ void trataTecla(char k)
             telaMsg(adicionarPIN(pin, nome) ? "PIN adicionado" : "Falha ao adicionar", "Padrao: User_PIN");
           }
           else
-          {
             telaMsg("PIN invalido", "4-8 digitos");
-          }
         }
         else if (tipoAcaoAdmin == 'D')
         {
@@ -318,9 +362,7 @@ void trataTecla(char k)
             telaMsg("MASTER atualizado", "");
           }
           else
-          {
             telaMsg("MASTER invalido", "4-8 digitos");
-          }
         }
         acaoAdminPendente = false;
         tipoAcaoAdmin = 0;
@@ -616,7 +658,6 @@ void initFS()
   // CSV desativado no Wokwi
 #endif
 }
-
 void exportCSVSerial()
 {
 #if USE_LOCAL_CSV
@@ -649,12 +690,10 @@ void clearCSV()
   Serial.println("CSV desativado.");
 #endif
 }
-
 void logEvento(const String &resultado, const String &pin, const String &ssm)
 {
   String ts = timestampAgora();
   String usuario = nomePorPIN(pin);
-
 #if USE_LOCAL_CSV
   File f = LittleFS.open("/logs.csv", FILE_APPEND);
   if (f)
@@ -663,11 +702,8 @@ void logEvento(const String &resultado, const String &pin, const String &ssm)
     f.close();
   }
 #endif
-
   if (haveCloud())
-  {
     supabasePOST(ts, usuario, pin, ssm, resultado);
-  }
 }
 
 // ============ Wi-Fi / NTP ============
@@ -675,17 +711,17 @@ void initWiFiNTP()
 {
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("Conectando Wi-Fi");
-  unsigned long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 12000)
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000)
   {
     Serial.print(".");
-    delay(400);
+    delay(300);
   }
   Serial.println();
   if (WiFi.status() == WL_CONNECTED)
   {
     configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
-    for (int i = 0; i < 20; i++)
+    for (int i = 0; i < 15; i++)
     {
       struct tm ti;
       if (getLocalTime(&ti))
@@ -699,7 +735,6 @@ void initWiFiNTP()
     Serial.println("Wi-Fi falhou -> offline.");
   }
 }
-
 String timestampAgora()
 {
   if (WiFi.status() == WL_CONNECTED)
@@ -715,10 +750,13 @@ String timestampAgora()
   return "offline";
 }
 
-// ============ SUPABASE (REST) ============
+// ============ SUPABASE ============
 bool supabasePOST(const String &ts, const String &usuario, const String &pin,
                   const String &ssm, const String &resultado)
 {
+  if (WiFi.status() != WL_CONNECTED)
+    return false;
+
   String body = String("{") +
                 "\"timestamp\":\"" + ts + "\"," +
                 "\"usuario\":\"" + usuario + "\"," +
@@ -727,29 +765,32 @@ bool supabasePOST(const String &ts, const String &usuario, const String &pin,
                 "\"resultado\":\"" + resultado + "\"}";
 
   WiFiClientSecure client;
-  client.setInsecure(); // ⚠️ somente para testes; em produção use o root CA
-
+  client.setInsecure();
+  client.setTimeout(SUPA_CONN_TIMEOUT);
   HTTPClient http;
-  if (!http.begin(client, SUPABASE_URL))
+  http.setConnectTimeout(SUPA_CONN_TIMEOUT);
+  http.setReuse(false);
+
+  String url = String("https://") + SUPABASE_HOST + "/rest/v1/acessos";
+  if (!http.begin(client, url))
   {
-    Serial.println("HTTP begin falhou");
+    Serial.println("[Supa] begin() falhou");
+    http.end();
     return false;
   }
+
   http.addHeader("Content-Type", "application/json");
   http.addHeader("apikey", SUPABASE_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
   http.addHeader("Prefer", "return=minimal");
 
   int code = http.POST(body);
-  Serial.printf("Supabase HTTP %d\n", code);
-  // Se precisar debugar:
-  // if (code >= 400) { Serial.println(http.getString()); }
+  Serial.printf("Supabase HTTP %d (1/1)\n", code);
   http.end();
-
   return (code == 200 || code == 201 || code == 204);
 }
 
-// ============ RELÉ / LEDs ============
+// ============ Relé / LEDs ============
 void abreFechadura()
 {
   digitalWrite(PINO_RELE, RELE_ATIVO_ALTO ? HIGH : LOW);
