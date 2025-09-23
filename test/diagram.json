@@ -39,7 +39,7 @@
       "type": "wokwi-led",
       "id": "led2",
       "top": 25.2,
-      "left": 157.4,
+      "left": 157.8,
       "attrs": { "color": "red", "flip": "1" }
     },
     {
@@ -56,6 +56,13 @@
       "top": -118.4,
       "left": 293.6,
       "attrs": { "pins": "i2c" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 159.8,
+      "left": -76.8,
+      "attrs": { "color": "green", "xray": "1" }
     }
   ],
   "connections": [
@@ -81,7 +88,9 @@
     [ "r1:1", "led1:A", "green", [ "h0" ] ],
     [ "esp:GND.1", "led2:C", "black", [ "v67.05", "h115.2" ] ],
     [ "lcd1:GND", "esp:GND.1", "black", [ "h-38.4", "v307.2", "h-192" ] ],
-    [ "lcd1:VCC", "esp:5V", "red", [ "h-48", "v288.1", "h-134.4" ] ]
+    [ "lcd1:VCC", "esp:5V", "red", [ "h-48", "v288.1", "h-134.4" ] ],
+    [ "esp:26", "btn1:1.r", "purple", [ "v0" ] ],
+    [ "btn1:2.l", "esp:GND.2", "black", [ "h-19.2", "v-182.2" ] ]
   ],
   "dependencies": {}
 }
