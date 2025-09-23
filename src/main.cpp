@@ -144,7 +144,7 @@ void setup()
 
   if (!prefs.isKey("cred"))
   {
-    prefs.putString("cred", "1234|Usuario_A,4321|Usuario_B");
+    prefs.putString("cred", "2222|Leonardo,1111|Juliano,3333|Carlos,4444|Jonatas,5555|Ricardo");
   }
   carregarCredenciais();
 
@@ -501,7 +501,7 @@ void telaMsg(const char *l1, const char *l2)
 // ============ CREDENCIAIS ============
 void carregarCredenciais()
 {
-  String csv = prefs.getString("cred", "1234|Usuario_A,4321|Usuario_B");
+  String csv = prefs.getString("cred", "2222|Leonardo,1111|Juliano,3333|Carlos,4444|Jonatas,5555|Ricardo");
   qtdCreds = 0;
   int start = 0;
   while (start < csv.length() && qtdCreds < MAX_CREDS)
